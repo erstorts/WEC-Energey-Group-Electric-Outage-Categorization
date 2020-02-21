@@ -19,7 +19,6 @@ def category_name(data, decoder_obj):
     return result
     
 def get_decoder(general_category):
-
     decoder_list = []
     f = open(general_category + '.txt', 'r')
     f1 = f.readlines()
@@ -27,13 +26,47 @@ def get_decoder(general_category):
         x = x[:-1]
         decoder_list.append(x)
 
+    if general_category == 'General':
+        decoder_list.remove('')
+
     decoder_dict = {}
     for i in range(0, len(decoder_list)):
         decoder_dict[i] = decoder_list[i]
-        
+
     return decoder_dict
     
-def predict_category(data, category):
+def predict_general_category(data):
+    #import text vectorizer
+    count_vectorizer = joblib.load('General-count-vectorizer.pkl')
+    #import model
+    model = joblib.load('General-model.pkl')  
+
+    #vectorize text
+    X = count_vectorizer.transform(data['mobil_comments'])
+
+    # Use the loaded model to make predictions
+    pred = model.predict(X)
+    pred_prob = model.predict_proba(X)
+
+    confidence = []
+    for i in range(0,len(pred_prob)):
+        confidence.append(pred_prob[i][pred[i]])
+
+    #convert the numberic categories back to words
+    decoder = get_decoder('General')
+
+    #convert the numberic categories back to words
+    data['General Predictions'] = category_name(pred, decoder)
+    data['General Confidence'] = confidence
+
+    return data
+    
+    
+def predict_sub_category(data, category):
+    
+    #limit the data to input category
+    data = data[data['General Predictions'] == str(category)]
+    
     if category == 'Planned':
         data['Subcategory Predictions'] = 'New Construction'
         return data
@@ -41,44 +74,37 @@ def predict_category(data, category):
         data['Subcategory Predictions'] = 'Transmission'
         return data
     else:
-        if category == 'General':
-            var_name = 'General'
-        else:
-            var_name = 'Subcategory'
-        
-        
         #import text vectorizer
         count_vectorizer = joblib.load(category + '-count-vectorizer.pkl')
         #import model
         model = joblib.load(category +'-model.pkl')  
         
-        if category != 'General':
-        #limit the data
-            data = data[data['General Predictions'] == str(category)]
-            
         #vectorize text
-        X = count_vectorizer.transform(data['Mobile Data Remarks'])
+        X = count_vectorizer.transform(data['mobil_comments'])
 
         # Use the loaded model to make predictions
-        try:
-            pred = model.predict(X)
-            pred_prob = model.predict_proba(X)
-            
-            confidence = []
-            for i in range(0,len(pred_prob)):
-                confidence.append(pred_prob[i][pred[i]])
-        except:
-            data[var_name + ' Predictions'] = ''
-            data[var_name + ' Confidence'] = ''
-            return data
+        #try:
+        pred = model.predict(X)
+        pred_prob = model.predict_proba(X)
 
+        confidence = []
+        for i in range(0,len(pred_prob)):
+            confidence.append(pred_prob[i][pred[i]])
+        #except:
+         #   data[var_name + ' Predictions'] = ''
+         #   data[var_name + ' Confidence'] = ''
+         #   return data
+    
+        #get number to word decoder
         decoder = get_decoder(category)
-        
 
-        data[var_name + ' Predictions'] = category_name(pred, decoder)
-        data[var_name + ' Confidence'] = confidence
+        #convert back to word
+        data['Subcategory Predictions'] = category_name(pred, decoder)
+        data['Subcategory Confidence'] = confidence
 
         return data
+        
+
         
 def lambda_handler(event, context):
     '''
@@ -117,17 +143,16 @@ def lambda_handler(event, context):
     all_outages = pd.read_csv(model_file)
 
     #predict the general category
-    all_outages = predict_category(all_outages, 'General')
+    all_outages = predict_general_category(all_outages)
+    print(all_outages.shape)
     
-    #make a list of general categories to use later
-    outage_types = ['Equipment', 'Vegetation', 'Public', 'Wildlife', 'Weather', 
-                'Other', 'Power-Supply', 'Planned']
     
     #loop through general categories and predict the subcategories
     results_list = []
-    for types in outage_types:
-        results_list.append(predict_category(all_outages, types))
-    
+    for types in list(all_outages['General Predictions'].unique()):
+        print(types)
+        results_list.append(predict_sub_category(all_outages, types))
+        
     #combine all subcategory predictions
     results_df = pd.concat(results_list, sort=True)
     
@@ -135,14 +160,16 @@ def lambda_handler(event, context):
     results_df = results_df[['Outage ID', 'Company', 
                             'General Predictions', 'General Confidence', 
                             'Subcategory Predictions', 'Subcategory Confidence']]
+    print(results_df.shape)
     
     #add columns for human review eval
     results_df['Was the Outage Reportable?'] = ''
     results_df['Reportable Reference Outage ID'] = ''
     results_df['Did You Change the General Category?'] = ''
+    results_df['What General Category did you change it to?'] = ''
     results_df['Was the General Prediction Correct?'] = ''
     results_df['Did You Change the Subcategory Category?'] = ''
-    results_df['Was the Subcategory Prediction Correct?'] = ''    
+    results_df['Was the Subcategory Prediction Correct?'] = ''   
     
     #file name
     results_file_location = ('NLP-Results_{}_{}_{}.csv').format(today.year, 
